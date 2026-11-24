@@ -1,0 +1,27 @@
+# Compiled build output
+build/
+
+# Object files and kernel build artifacts
+*.o
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.cmd
+.*.cmd
+*.symvers
+*.order
+*.a
+*.out
+.tmp_versions/
+
+# Editor, IDE, and OS temporary files
+*.swp
+*.swo
+*~
+.#*
+\#*#
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
