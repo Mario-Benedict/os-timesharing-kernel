@@ -1,10 +1,11 @@
 /* SPDX-License-Identifier: GPL-2.0 */
 /*
- * cfs_shared.h - Shared ABI definitions between the custom Linux 6.6 LTS
- *                CFS-inspired virtual runtime syscall and user-space simulator.
+ * cfs_shared.h - Shared ABI definitions between the custom Linux 7.0 x86_64
+ *                (Ubuntu Server 26.04 LTS) CFS-inspired virtual runtime
+ *                syscall and user-space C11 simulator.
  *
  * This header is designed to compile cleanly in both kernel space (__KERNEL__)
- * and POSIX/C11 user space.
+ * and POSIX/C11 user space (GCC 15 + glibc 2.43 on Ubuntu Server 26.04 LTS).
  */
 
 #ifndef CFS_SHARED_H
@@ -17,9 +18,15 @@
 #include <sys/types.h>
 #endif
 
-/* Custom x86_64 system call number registered in syscall_64.tbl */
+/*
+ * Custom x86_64 system call number registered in syscall_64.tbl.
+ *
+ * Linux 7.0 (Ubuntu Server 26.04 LTS) occupies common x86_64 slots up through
+ * #472 (fchroot). Slot 500 sits cleanly inside the unassigned 473..511 common
+ * range below the x32 ABI block starting at 512.
+ */
 #ifndef __NR_cfs_timeshare
-#define __NR_cfs_timeshare 462
+#define __NR_cfs_timeshare 500
 #endif
 
 /* Maximum number of processes managed in a single scheduling session */

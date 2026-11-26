@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * cfs_timeshare.c - Custom Linux 6.6 LTS x86_64 System Call implementing a
- *                   CFS-Inspired Virtual Runtime (vruntime) Time-Sharing Scheduler.
+ * cfs_timeshare.c - Custom Linux 7.0 x86_64 (Ubuntu Server 26.04 LTS) System
+ *                   Call implementing a CFS-Inspired Virtual Runtime (vruntime)
+ *                   Time-Sharing Scheduler.
  *
  * System call signature:
  *   long sys_cfs_timeshare(struct cfs_proc_arg __user *user_procs,
@@ -18,8 +19,8 @@
  *     prunes exited/zombie tasks, picks the alive task with minimum vruntime,
  *     resumes it via SIGCONT, and re-arms the timer with a dynamically weighted
  *     time slice clamped to safe bounds.
- *   - Stops the timer cleanly and logs a final summary table in dmesg once all
- *     registered processes have terminated.
+ *   - Stops the timer cleanly via timer_delete_sync() and logs a final summary
+ *     table in dmesg once all registered processes have terminated.
  */
 
 #include <linux/errno.h>
@@ -27,8 +28,10 @@
 #include <linux/kernel.h>
 #include <linux/limits.h>
 #include <linux/math64.h>
+#include <linux/minmax.h>
 #include <linux/mutex.h>
 #include <linux/pid.h>
+#include <linux/printk.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
@@ -108,7 +111,7 @@ struct cfs_scheduler_state {
 
 /*
  * cfs_syscall_mutex serializes concurrent invocations of sys_cfs_timeshare in
- * sleepable process context so del_timer_sync() can be called safely without
+ * sleepable process context so timer_delete_sync() can be called safely without
  * ever holding cfs_sched.lock (preventing timer-callback lock inversion).
  */
 static DEFINE_MUTEX(cfs_syscall_mutex);
@@ -457,7 +460,7 @@ SYSCALL_DEFINE3(cfs_timeshare,
 
 	/*
 	 * Safely quiesce any previously active timer session before modifying
-	 * scheduler state. Never hold cfs_sched.lock across del_timer_sync().
+	 * scheduler state. Never hold cfs_sched.lock across timer_delete_sync().
 	 */
 	if (!cfs_sched.timer_initialized) {
 		timer_setup(&cfs_sched.timer, cfs_timer_callback, 0);
@@ -466,7 +469,7 @@ SYSCALL_DEFINE3(cfs_timeshare,
 		spin_lock_irqsave(&cfs_sched.lock, flags);
 		cfs_sched.running = false;
 		spin_unlock_irqrestore(&cfs_sched.lock, flags);
-		del_timer_sync(&cfs_sched.timer);
+		timer_delete_sync(&cfs_sched.timer);
 	}
 
 	spin_lock_irqsave(&cfs_sched.lock, flags);

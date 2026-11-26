@@ -1,6 +1,6 @@
 # CFS-Inspired Virtual Runtime (`vruntime`) Time-Sharing Scheduler
 
-A complete Operating Systems project implementing a **Completely Fair Scheduler (CFS)-inspired virtual runtime (`vruntime`) time-sharing scheduler** as a **custom Linux 6.6 LTS (`x86_64`) system call** (`#462`, `sys_cfs_timeshare`), paired with a modular **C11 user-space simulator** and a live ANSI terminal dashboard.
+A complete Operating Systems project implementing a **Completely Fair Scheduler (CFS)-inspired virtual runtime (`vruntime`) time-sharing scheduler** as a **custom Linux 7.0 (`x86_64`) system call** (`#500`, `sys_cfs_timeshare`) on **Ubuntu Server 26.04 LTS ("Resolute Raccoon")**, paired with a modular **C11 user-space simulator** and a live ANSI terminal dashboard.
 
 ---
 
@@ -35,16 +35,31 @@ For the full ASCII architecture diagram, locking guarantees, and worked numerica
 
 ---
 
+## Standardized Platform Stack (Ubuntu Server 26.04 LTS)
+
+Every script, kernel source file, user-space binary, and build instruction in this repository is aligned to a single consistent platform:
+
+| Layer | Version / Standard |
+| :--- | :--- |
+| **Operating System** | **Ubuntu Server 26.04 LTS** (*Resolute Raccoon*, `x86_64`) |
+| **Kernel Source & Target** | **Linux 7.0** via official Ubuntu package `linux-source` (`linux-source-7.0.0` $\rightarrow$ **`7.0.0-cfs-timeshare`**) |
+| **Custom System Call** | **`#500`** (`__NR_cfs_timeshare` / `sys_cfs_timeshare`, safely above Linux 7.0's `#472 fchroot` and below `#512` x32) |
+| **Kernel Timer API** | `timer_setup()`, `mod_timer()`, **`timer_delete_sync()`** (Linux 7.0 native API) |
+| **Compiler & C Library** | **GCC 15** (`-std=c11 -Wall -Wextra -O2`), **glibc 2.43**, **binutils 2.46** |
+| **System Tooling** | **Dracut** (default initramfs generator), **`sudo-rs`**, **`uutils` coreutils**, **GRUB2**, **tmux** |
+
+---
+
 ## Repository Structure
 
 ```text
 .
 ├── Makefile                            # Root unified Makefile (all, check, demo, clean)
 ├── include/
-│   └── cfs_shared.h                    # Shared kernel/user-space ABI (#462, struct cfs_proc_arg)
+│   └── cfs_shared.h                    # Shared kernel/user-space ABI (#500, struct cfs_proc_arg)
 ├── kernel/
 │   └── cfs_timeshare/
-│       ├── cfs_timeshare.c             # Custom Linux 6.6 LTS syscall + timer/signal engine
+│       ├── cfs_timeshare.c             # Custom Linux 7.0 syscall + timer_delete_sync/signal engine
 │       └── Makefile                    # Kbuild rule (obj-y += cfs_timeshare.o)
 ├── userspace/
 │   ├── main.c                          # CLI/interactive orchestrator, mmap shm, waitpid monitor
@@ -53,9 +68,9 @@ For the full ASCII architecture diagram, locking guarantees, and worked numerica
 │   ├── ui.c                            # Flicker-free ANSI terminal dashboard & summary report
 │   └── ui.h                            # Renderer interface
 ├── scripts/
-│   ├── setup_vm_deps.sh                # Ubuntu/Debian kernel build tools + GCC + tmux installer
-│   ├── patch_kernel.sh                 # Idempotent Linux 6.6 LTS kernel source tree patcher
-│   └── run_demo.sh                     # Automated 2-pane tmux split-screen demo launcher
+│   ├── setup_vm_deps.sh                # Ubuntu Server 26.04 LTS build deps + linux-source-7.0.0 + tmux
+│   ├── patch_kernel.sh                 # Idempotent Linux 7.0 (linux-source-7.0.0) source patcher
+│   └── run_demo.sh                     # Automated 2-pane tmux split-screen demo launcher (sudo-rs aware)
 ├── docs/
 │   └── ARCHITECTURE.md                 # Architecture diagram, vruntime math & locking model
 ├── .gitattributes                      # Enforces LF line endings across all scripts & code
@@ -64,15 +79,15 @@ For the full ASCII architecture diagram, locking guarantees, and worked numerica
 
 ---
 
-## Prerequisites & VM Setup (Ubuntu Server 22.04 / 24.04 x86_64)
+## Prerequisites & VM Setup (Ubuntu Server 26.04 LTS x86_64)
 
-Recommended virtual machine specification for compiling Linux 6.6 LTS smoothly:
-- **OS:** Ubuntu Server 22.04 LTS or 24.04 LTS (`x86_64`)
+Recommended virtual machine specification for compiling Ubuntu 26.04's Linux 7.0 kernel smoothly:
+- **OS:** **Ubuntu Server 26.04 LTS** (`x86_64`, *Resolute Raccoon*)
 - **CPU:** 4+ vCPUs (more cores significantly reduce kernel build time)
-- **RAM:** 4–8 GB
-- **Disk:** 35+ GB free space (Linux 6.6 build tree + modules take ~20–25 GB)
+- **RAM:** 6–8 GB (4 GB minimum; 8 GB recommended if keeping `CONFIG_DEBUG_INFO_BTF=y`)
+- **Disk:** 40+ GB free space (Linux 7.0 build tree + modules + debug info take ~25–30 GB)
 
-Install all required packages (kernel build toolchain, GCC, `dwarves`, `libelf-dev`, `tmux`, etc.):
+Install all required build packages **and** Ubuntu 26.04's matching `linux-source` (`linux-source-7.0.0`) package in one step:
 
 ```bash
 chmod +x scripts/*.sh
@@ -81,53 +96,71 @@ chmod +x scripts/*.sh
 
 ---
 
-## Building & Installing the Patched Linux 6.6 LTS Kernel
+## Building & Installing the Patched Linux 7.0 Kernel
 
-### 1. Download & Extract Linux 6.6 LTS
+### 1. Extract Ubuntu Server 26.04 LTS's Native Linux 7.0 Source
+
+`setup_vm_deps.sh` installs `/usr/src/linux-source-7.0.0.tar.bz2` directly from Ubuntu 26.04's official APT repository (guaranteeing a 1:1 match with your VM's running kernel configuration, GCC 15, AppArmor, and Dracut):
 
 ```bash
 cd ~
-wget https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.6.63.tar.xz
-tar -xf linux-6.6.63.tar.xz
+tar -xjf /usr/src/linux-source-7.0.0.tar.bz2
 ```
 
-*(Any Linux 6.6.x LTS release is supported.)*
+This creates `~/linux-source-7.0.0/`.
 
 ### 2. Patch the Kernel Source Tree Idempotently
 
-From the root of this repository, run `patch_kernel.sh` pointing to your extracted Linux 6.6 directory:
+From the root of this repository, run `patch_kernel.sh` pointing to `~/linux-source-7.0.0`:
 
 ```bash
 cd /path/to/os-timesharing-kernel
-./scripts/patch_kernel.sh ~/linux-6.6.63
+./scripts/patch_kernel.sh ~/linux-source-7.0.0
 ```
 
 This script safely performs 5 idempotent steps (running it again creates zero duplicates):
-1. Copies `kernel/cfs_timeshare/` into `<kernel>/cfs_timeshare/` and `include/cfs_shared.h` into `<kernel>/include/linux/cfs_shared.h`.
-2. Adds `obj-y += cfs_timeshare/` to root `<kernel>/Kbuild`.
-3. Declares `asmlinkage long sys_cfs_timeshare(...)` in `<kernel>/include/linux/syscalls.h`.
-4. Registers syscall **`462`** (`cfs_timeshare`) in `<kernel>/arch/x86/entry/syscalls/syscall_64.tbl`.
-5. Sets `EXTRAVERSION = -cfs-timeshare` in `<kernel>/Makefile`.
+1. Copies `kernel/cfs_timeshare/` into `~/linux-source-7.0.0/cfs_timeshare/` and `include/cfs_shared.h` into `~/linux-source-7.0.0/include/linux/cfs_shared.h`.
+2. Adds `obj-y += cfs_timeshare/` to root `~/linux-source-7.0.0/Kbuild`.
+3. Declares `asmlinkage long sys_cfs_timeshare(...)` in `~/linux-source-7.0.0/include/linux/syscalls.h`.
+4. Registers syscall **`500`** (`cfs_timeshare`, parsed from `include/cfs_shared.h`) in `~/linux-source-7.0.0/arch/x86/entry/syscalls/syscall_64.tbl`.
+5. Sets `EXTRAVERSION = -cfs-timeshare` in `~/linux-source-7.0.0/Makefile`.
 
-### 3. Configure, Compile, and Install
+### 3. Configure, Compile, Install, and Pin in GRUB (Dracut-Ready)
 
 ```bash
-cd ~/linux-6.6.63
+cd ~/linux-source-7.0.0
 
-# Seed config from your current Ubuntu kernel and accept defaults for new symbols
+# 1. Seed .config from your running Ubuntu Server 26.04 LTS Linux 7.0 kernel
 cp -v /boot/config-"$(uname -r)" .config
-make olddefconfig
 
-# Clear Ubuntu Canonical signing key paths so local compilation succeeds
+# 2. Clear Canonical signing key paths and disable WERROR & RUST for clean local GCC 15 builds
 scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
 scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
+scripts/config --disable WERROR
+scripts/config --disable RUST
 
-# Compile kernel and modules using all available vCPUs
+# Optional: disable BTF debug generation to save ~15 GB disk space and speed up linking
+# scripts/config --disable DEBUG_INFO_BTF
+
+# 3. Reconcile config and compile using all available vCPUs
+make olddefconfig
 make -j"$(nproc)"
 
-# Install modules and kernel image, then update GRUB
+# 4. Install kernel modules and kernel image into /boot
 sudo make modules_install
 sudo make install
+
+# 5. Verify initramfs image exists (fresh Ubuntu Server 26.04 LTS uses Dracut by default)
+KVER="$(make -s kernelrelease)"
+echo "Installed kernel release: ${KVER}"
+if [ ! -f "/boot/initrd.img-${KVER}" ]; then
+    sudo dracut --force "/boot/initrd.img-${KVER}" "${KVER}"
+fi
+
+# 6. Update GRUB, verify the custom entry, pin it as default, and reboot
+sudo update-grub
+grep -E "menuentry 'Ubuntu, with Linux ${KVER}'" /boot/grub/grub.cfg
+sudo sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${KVER}\"|" /etc/default/grub
 sudo update-grub
 sudo reboot
 ```
@@ -136,14 +169,14 @@ sudo reboot
 
 ```bash
 uname -r
-# Expected output: 6.6.63-cfs-timeshare
+# Expected output: 7.0.0-cfs-timeshare
 ```
 
 ---
 
 ## Building & Checking the User-Space Simulator
 
-Return to the repository root and verify zero-warning compilation with GCC (C11, `-Wall -Wextra -O2`):
+Return to the repository root and verify zero-warning compilation with Ubuntu 26.04's **GCC 15** (`-std=c11 -Wall -Wextra -O2`):
 
 ```bash
 make check   # Strict C11 (-Werror -Wpedantic -Wshadow -Wformat=2) + bash -n checks
@@ -162,16 +195,21 @@ make clean
 
 ### Option A: Automated 2-Pane `tmux` Split-Screen Demo (Recommended)
 
-Clears `dmesg`, launches `./build/cfs_sim` in the **left pane**, and streams live `[CFS_SYS]` kernel scheduling decisions (`sudo dmesg -w | grep --line-buffered "\[CFS_SYS\]"`) in the **right pane**:
+Clears `dmesg`, launches `./build/cfs_sim` in the **left pane**, and streams live `[CFS_SYS]` kernel scheduling decisions (`dmesg -w | grep --line-buffered "\[CFS_SYS\]"`) in the **right pane**:
 
 ```bash
+# Recommended on Ubuntu Server 26.04 LTS (`sudo-rs` enforces per-TTY auth, so running
+# with sudo avoids a second password prompt inside the right tmux log pane):
+sudo ./scripts/run_demo.sh
+
+# Or run as a normal user (press Ctrl-b -> in tmux if sudo-rs prompts in the right pane):
 ./scripts/run_demo.sh
 ```
 
 You can also forward CLI flags directly to `./build/cfs_sim`:
 
 ```bash
-./scripts/run_demo.sh -n 6 -q 100 -w 80
+sudo ./scripts/run_demo.sh -n 6 -q 100 -w 80
 ```
 
 ### Option B: Standalone CLI / Interactive Execution
@@ -208,7 +246,7 @@ make demo ARGS="-n 6 -q 100 -w 80"
 ========================================================================================
   CFS-Inspired Virtual Runtime (vruntime) Time-Sharing Scheduler — Live Dashboard
 ========================================================================================
-  Kernel: 6.6.63-cfs-timeshare  |  Syscall: #462  |  Quantum: 100 ms  |  Elapsed: 4.85s
+  Kernel: 7.0.0-cfs-timeshare  |  Syscall: #500  |  Quantum: 100 ms  |  Elapsed: 4.85s
   Workers: 6 total (1 running, 4 waiting, 1 done)  |  Work Target: 80 units/proc
 ----------------------------------------------------------------------------------------
   ID   PID     Priority  Nice  Weight  Work Progress                    Units     CPU(ms)  State
@@ -234,22 +272,38 @@ make demo ARGS="-n 6 -q 100 -w 80"
 
 ---
 
-## Troubleshooting
+## Troubleshooting (Ubuntu Server 26.04 LTS)
 
-- **`syscall(__NR_cfs_timeshare=462) failed: Function not implemented (errno=38 / ENOSYS)`**
-  - You are still booted into the stock Ubuntu kernel. Run `uname -r` and verify `-cfs-timeshare` appears. If GRUB booted the old kernel by default, select **Advanced options for Ubuntu → Linux 6.6.x-cfs-timeshare** at boot.
+- **`syscall(__NR_cfs_timeshare=500) failed: Function not implemented (errno=38 / ENOSYS)`**
+  - You are still booted into Ubuntu 26.04's stock `7.0.0-*-generic` kernel. Run `uname -r` and verify `7.0.0-cfs-timeshare` appears. Re-run Step 6 (`GRUB_DEFAULT` + `sudo update-grub`) or select **Advanced options for Ubuntu → Ubuntu, with Linux 7.0.0-cfs-timeshare** at the GRUB prompt.
+- **Boot stops with `unable to mount root fs` or missing `initrd.img-7.0.0-cfs-timeshare`**
+  - Ubuntu Server 26.04 LTS uses **Dracut** for initramfs generation. Boot the stock `7.0.0-*-generic` kernel and generate the missing initrd:
+    ```bash
+    sudo dracut --force /boot/initrd.img-7.0.0-cfs-timeshare 7.0.0-cfs-timeshare
+    sudo update-grub
+    ```
+- **Kernel build fails with `Rust compiler ... not found` or `CONFIG_RUST` errors**
+  - Ubuntu 26.04's stock `.config` enables `CONFIG_RUST=y`. Disable it before building:
+    ```bash
+    scripts/config --disable RUST
+    make olddefconfig
+    ```
 - **Kernel build fails on `debian/canonical-certs.pem` or `SYSTEM_TRUSTED_KEYS`**
-  - Run both commands in the kernel source directory before `make -j"$(nproc)"`:
+  - Clear both Canonical signing key strings before `make -j"$(nproc)"`:
     ```bash
     scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
     scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
     ```
-- **Kernel build fails with `BTF: .tmp_vmlinux.btf: pahole not found`**
-  - Install `dwarves` via `./scripts/setup_vm_deps.sh` (or disable BTF with `scripts/config --disable DEBUG_INFO_BTF`).
+- **Kernel build fails with `BTF: .tmp_vmlinux.btf: pahole not found` or runs low on RAM/disk**
+  - Ensure `dwarves` and `libdw-dev` are installed via `./scripts/setup_vm_deps.sh`, or disable BTF cleanly with:
+    ```bash
+    scripts/config --disable DEBUG_INFO_BTF
+    make olddefconfig
+    ```
+- **Right `tmux` pane waits for a password during `./scripts/run_demo.sh`**
+  - Ubuntu 26.04's `sudo-rs` strictly enforces per-TTY credential caching, so the right pane PTY cannot share your outer shell's sudo ticket. Press `Ctrl-b →` in `tmux` to enter your password, or launch with `sudo ./scripts/run_demo.sh`.
 - **Bash script fails with `/usr/bin/env: 'bash\r': No such file or directory`**
-  - This happens if files were copied manually from Windows with CRLF endings. Normalize with `sed -i 's/\r$//' scripts/*.sh`.
-- **`dmesg: read kernel buffer failed: Operation not permitted`**
-  - Ubuntu restricts `dmesg` to root (`kernel.dmesg_restrict=1`). Always use `sudo dmesg -w` or run `./scripts/run_demo.sh` which prompts for `sudo` automatically.
+  - Normalize Windows CRLF endings with `sed -i 's/\r$//' scripts/*.sh`.
 - **Inspecting full kernel summary after the demo finishes:**
   ```bash
   sudo dmesg | grep "\[CFS_SYS\]" | tail -n 35

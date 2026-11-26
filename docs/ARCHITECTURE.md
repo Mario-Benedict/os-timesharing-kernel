@@ -1,6 +1,6 @@
 # System Architecture — CFS-Inspired Virtual Runtime Time-Sharing Scheduler
 
-This document details the end-to-end architecture, kernel-to-user-space boundary, virtual runtime (`vruntime`) mathematical model, concurrency invariants, and process lifecycle of the custom Linux 6.6 LTS x86_64 time-sharing scheduler.
+This document details the end-to-end architecture, kernel-to-user-space boundary, virtual runtime (`vruntime`) mathematical model, concurrency invariants, and process lifecycle of the custom **Linux 7.0 (`x86_64`)** time-sharing scheduler targeting **Ubuntu Server 26.04 LTS ("Resolute Raccoon")**.
 
 ---
 
@@ -36,20 +36,20 @@ This document details the end-to-end architecture, kernel-to-user-space boundary
           |  SIGSTOP / SIGCONT job-control signals from kernel     |
           |                  |                  |                  |
    =======|==================|==================|==================|================
-   SYSCALL BOUNDARY: syscall(__NR_cfs_timeshare = 462, args[], count, base_quantum_ms)
+   SYSCALL BOUNDARY: syscall(__NR_cfs_timeshare = 500, args[], count, base_quantum_ms)
    Shared ABI Header: include/cfs_shared.h  (struct cfs_proc_arg { pid_t; int; })
    Dispatch Table:    arch/x86/entry/syscalls/syscall_64.tbl -> __x64_sys_cfs_timeshare
    =================================================================================
           |                  |                  |                  |
 +=========|==================|==================|==================|===================+
-|         |                  |   KERNEL SPACE (Linux 6.6 LTS)      |                   |
+|         |                  |   KERNEL SPACE (Linux 7.0 — Ubuntu 26.04 LTS)           |
 |         |                  |                  |                  |                   |
 |  +--------------------------------------------------------------------------------+  |
 |  |  SYSCALL_DEFINE3(cfs_timeshare, user_procs, count, base_quantum_ms)            |  |
 |  |  (kernel/cfs_timeshare/cfs_timeshare.c)                                        |  |
 |  |   1. Validate args (1 <= count <= 16, 10 <= quantum <= 2000, no dup PIDs)      |  |
 |  |   2. copy_from_user() into kernel stack array kprocs[MAX_CFS_PROCS]            |  |
-|  |   3. mutex_lock(&cfs_syscall_mutex) -> del_timer_sync(&cfs_sched.timer)        |  |
+|  |   3. mutex_lock(&cfs_syscall_mutex) -> timer_delete_sync(&cfs_sched.timer)     |  |
 |  |   4. spin_lock_irqsave(&cfs_sched.lock) -> map nice -> weight, pick 1st task   |  |
 |  |   5. SIGSTOP peers, SIGCONT 1st task, mod_timer() -> return 0                  |  |
 |  +---------------------------------------+----------------------------------------+  |
@@ -158,8 +158,8 @@ Kernel timer callbacks execute in **softirq (atomic) context** where sleeping is
 | Mechanism | Context | Purpose & Invariant |
 | :--- | :--- | :--- |
 | `copy_from_user()` | Process context (`sys_cfs_timeshare`), **no locks held** | User-memory faults may sleep; copy completes before taking `cfs_syscall_mutex` or `cfs_sched.lock`. |
-| `DEFINE_MUTEX(cfs_syscall_mutex)` | Process context (`sys_cfs_timeshare` only) | Serializes concurrent syscall invocations so `del_timer_sync()` never races with another caller. Never acquired in timer softirq. |
-| `del_timer_sync(&cfs_sched.timer)` | Process context under `cfs_syscall_mutex`, **outside `cfs_sched.lock`** | Waits for any in-flight softirq timer callback on another CPU to exit. Calling it outside `cfs_sched.lock` makes AB-BA deadlock impossible. |
+| `DEFINE_MUTEX(cfs_syscall_mutex)` | Process context (`sys_cfs_timeshare` only) | Serializes concurrent syscall invocations so `timer_delete_sync()` never races with another caller. Never acquired in timer softirq. |
+| `timer_delete_sync(&cfs_sched.timer)` | Process context under `cfs_syscall_mutex`, **outside `cfs_sched.lock`** | Waits for any in-flight softirq timer callback on another CPU to exit. Calling it outside `cfs_sched.lock` makes AB-BA deadlock impossible (uses Linux 7.0's native `timer_delete_sync()` API). |
 | `spin_lock_irqsave(&cfs_sched.lock)` | Both `sys_cfs_timeshare` and `cfs_timer_callback` | Protects the 16-slot scheduler table, `tick_count`, `current_idx`, and `running` flag across SMP CPUs and local interrupts without sleeping. |
 | `rcu_read_lock()` / `rcu_read_unlock()` | Inside `cfs_signal_pid()` and `cfs_pid_is_alive()` | Safely resolves `pid_task(find_vpid(pid), PIDTYPE_PID)`, checks `pid_alive()` + `exit_state` (`EXIT_ZOMBIE \| EXIT_DEAD`) + `PF_EXITING`, and invokes non-sleeping `send_sig()`. |
 | C11 `<stdatomic.h>` (`_Atomic`) | User-space anonymous `mmap` shared region | Lock-free acquire/release progress and CPU-time updates between forked workers and the parent dashboard renderer. |
@@ -198,11 +198,11 @@ Kernel timer callbacks execute in **softirq (atomic) context** where sleeping is
 
 | File | Responsibility |
 | :--- | :--- |
-| [include/cfs_shared.h](../include/cfs_shared.h) | Dual kernel/user-space ABI (`__NR_cfs_timeshare = 462`, `MAX_CFS_PROCS = 16`, `struct cfs_proc_arg`, priority/weight constants). |
-| [kernel/cfs_timeshare/cfs_timeshare.c](../kernel/cfs_timeshare/cfs_timeshare.c) | Custom Linux 6.6 LTS syscall (`SYSCALL_DEFINE3`), CFS weight table, `timer_list` tick engine, RCU signal dispatch, and `dmesg` summary logger. |
+| [include/cfs_shared.h](../include/cfs_shared.h) | Dual kernel/user-space ABI (`__NR_cfs_timeshare = 500`, `MAX_CFS_PROCS = 16`, `struct cfs_proc_arg`, priority/weight constants). |
+| [kernel/cfs_timeshare/cfs_timeshare.c](../kernel/cfs_timeshare/cfs_timeshare.c) | Custom Linux 7.0 syscall (`SYSCALL_DEFINE3`), CFS weight table, `timer_list` tick engine, `timer_delete_sync()`, RCU signal dispatch, and `dmesg` summary logger. |
 | [kernel/cfs_timeshare/Makefile](../kernel/cfs_timeshare/Makefile) | Kbuild integration (`obj-y += cfs_timeshare.o`). |
 | [userspace/main.c](../userspace/main.c) | CLI parser, interactive wizard, `mmap` shared state, deterministic `WUNTRACED` barrier, syscall invocation, and `waitpid` event loop. |
 | [userspace/worker.c](../userspace/worker.c) / [userspace/worker.h](../userspace/worker.h) | Signal handlers (`SIGUSR1`, `SIGTERM`), calibrated CPU-bound workload, and atomic telemetry updates. |
 | [userspace/ui.c](../userspace/ui.c) / [userspace/ui.h](../userspace/ui.h) | Flicker-free ANSI terminal dashboard and final fairness-vs-weight report. |
-| [scripts/patch_kernel.sh](../scripts/patch_kernel.sh) | Idempotent Linux 6.6 source tree patcher (sources, `Kbuild`, `syscalls.h`, `syscall_64.tbl`, `EXTRAVERSION`). |
-| [scripts/run_demo.sh](../scripts/run_demo.sh) | Automated `dmesg -C` + 2-pane `tmux` split-screen demo launcher. |
+| [scripts/patch_kernel.sh](../scripts/patch_kernel.sh) | Idempotent Ubuntu 26.04 Linux 7.0 (`linux-source-7.0.0`) source patcher (sources, `Kbuild`, `syscalls.h`, `syscall_64.tbl`, `EXTRAVERSION`). |
+| [scripts/run_demo.sh](../scripts/run_demo.sh) | Automated `dmesg -C` + 2-pane `tmux` split-screen demo launcher (`sudo-rs` aware). |

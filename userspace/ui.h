@@ -28,13 +28,13 @@ void cfs_ui_end_dashboard(struct cfs_ui_ctx *ui);
 
 /* Render one live frame of the real-time process progress dashboard */
 void cfs_ui_render_dashboard(const struct cfs_ui_ctx *ui,
-			     const struct cfs_shm_region *shm,
+			     struct cfs_shm_region *shm,
 			     uint64_t elapsed_us,
 			     int completed_count);
 
 /* Render the final execution summary and CFS weight-vs-fairness analysis */
 void cfs_ui_render_summary(const struct cfs_ui_ctx *ui,
-			   const struct cfs_shm_region *shm,
+			   struct cfs_shm_region *shm,
 			   bool was_aborted);
 
 #endif /* CFS_UI_H */

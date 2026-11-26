@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0
 #
 # patch_kernel.sh - Idempotently integrate the custom CFS-inspired vruntime
-#                   time-sharing system call (#462) into a Linux 6.6 LTS source tree.
+#                   time-sharing system call (#500) into the Ubuntu Server
+#                   26.04 LTS Linux 7.0 (`linux-source-7.0.0`) source tree.
 #
 # Usage:
 #   ./scripts/patch_kernel.sh <kernel_source_dir>
+# Example:
+#   ./scripts/patch_kernel.sh ~/linux-source-7.0.0
 
 set -euo pipefail
 
@@ -16,7 +19,7 @@ log_error() { printf '[ERROR] %s\n' "$*" >&2; }
 
 usage() {
     printf 'Usage: %s <kernel_source_dir>\n' "$0" >&2
-    printf 'Example: %s ~/linux-6.6.60\n' "$0" >&2
+    printf 'Example: %s ~/linux-source-7.0.0\n' "$0" >&2
 }
 
 if [[ $# -ne 1 ]]; then
@@ -53,7 +56,25 @@ if [[ ! -d "${SRC_MOD_DIR}" || ! -f "${SRC_SHARED_H}" ]]; then
     exit 1
 fi
 
-# Atomic replacement helper using a temporary file in the same directory
+# Read the single-source-of-truth syscall number from include/cfs_shared.h
+SYSCALL_NR="$(awk '$1 == "#define" && $2 == "__NR_cfs_timeshare" { print $3; exit }' "${SRC_SHARED_H}")"
+if [[ -z "${SYSCALL_NR}" || ! "${SYSCALL_NR}" =~ ^[0-9]+$ ]]; then
+    log_error "Could not parse numeric __NR_cfs_timeshare from ${SRC_SHARED_H}."
+    exit 1
+fi
+
+# Verify kernel version tuple from root Makefile (Ubuntu Server 26.04 LTS uses Linux 7.0)
+K_VER="$(awk -F= '/^VERSION[ \t]*=/ { gsub(/[ \t]/, "", $2); print $2; exit }' "${ROOT_MAKEFILE}")"
+K_PATCH="$(awk -F= '/^PATCHLEVEL[ \t]*=/ { gsub(/[ \t]/, "", $2); print $2; exit }' "${ROOT_MAKEFILE}")"
+K_SUB="$(awk -F= '/^SUBLEVEL[ \t]*=/ { gsub(/[ \t]/, "", $2); print $2; exit }' "${ROOT_MAKEFILE}")"
+K_FULL="${K_VER:-?}.${K_PATCH:-?}.${K_SUB:-?}"
+
+if [[ "${K_VER}" != "7" || "${K_PATCH}" != "0" ]]; then
+    log_warn "Target kernel tree is Linux ${K_FULL}; Ubuntu Server 26.04 LTS ships with Linux 7.0 (linux-source-7.0.0)."
+fi
+
+# Atomic replacement helper using a temporary file in the same directory.
+# Explicitly sets 0644 permissions (POSIX/uutils-safe; mktemp defaults to 0600).
 atomic_write_with_awk() {
     local target_file="$1"
     local awk_program="$2"
@@ -61,14 +82,16 @@ atomic_write_with_awk() {
 
     tmp_file="$(mktemp "${target_file}.cfs_patch.XXXXXX")"
     if awk "${awk_program}" "${target_file}" > "${tmp_file}"; then
-        mv "${tmp_file}" "${target_file}"
+        chmod 0644 "${tmp_file}"
+        mv -f "${tmp_file}" "${target_file}"
     else
         rm -f "${tmp_file}"
         return 1
     fi
 }
 
-log_info "Patching Linux kernel tree at: ${KERNEL_DIR}"
+log_info "Patching Linux ${K_FULL} kernel tree at: ${KERNEL_DIR}"
+log_info "Using custom x86_64 syscall number: #${SYSCALL_NR} (from include/cfs_shared.h)"
 
 # ---------------------------------------------------------------------------
 # Step 1: Copy kernel/cfs_timeshare/ and include/cfs_shared.h into kernel tree
@@ -80,7 +103,7 @@ cp -f "${SRC_SHARED_H}"                "${KERNEL_DIR}/include/linux/cfs_shared.h
 log_ok "[1/5] Installed cfs_timeshare/ sources and include/linux/cfs_shared.h."
 
 # ---------------------------------------------------------------------------
-# Step 2: Register cfs_timeshare/ in root Kbuild (Linux 6.6) or Makefile
+# Step 2: Register cfs_timeshare/ in root Kbuild (Linux 7.0) or Makefile
 # ---------------------------------------------------------------------------
 if [[ -f "${ROOT_KBUILD}" ]] && grep -Eq '^[[:space:]]*obj-y[[:space:]]*\+=[[:space:]]*kernel/' "${ROOT_KBUILD}"; then
     if grep -Eq '^[[:space:]]*obj-y[[:space:]]*\+=[[:space:]]*cfs_timeshare/' "${ROOT_KBUILD}"; then
@@ -149,7 +172,8 @@ else
         }
         { print $0 }
     ' "${SYSCALLS_H}" > "${tmp_syscalls}"; then
-        mv "${tmp_syscalls}" "${SYSCALLS_H}"
+        chmod 0644 "${tmp_syscalls}"
+        mv -f "${tmp_syscalls}" "${SYSCALLS_H}"
     else
         rm -f "${tmp_syscalls}"
         exit 1
@@ -158,31 +182,37 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Step 4: Register syscall 462 in arch/x86/entry/syscalls/syscall_64.tbl
+# Step 4: Register syscall #500 in arch/x86/entry/syscalls/syscall_64.tbl
 # ---------------------------------------------------------------------------
-if grep -Eq '^[[:space:]]*462[[:space:]]+common[[:space:]]+cfs_timeshare[[:space:]]+sys_cfs_timeshare' "${SYSCALL_TBL}"; then
-    log_ok "[4/5] syscall_64.tbl already registers syscall 462 (cfs_timeshare) (no change)."
-elif grep -Eq '^[[:space:]]*462[[:space:]]' "${SYSCALL_TBL}"; then
-    log_error "Syscall number 462 is already occupied by another syscall in ${SYSCALL_TBL}:"
-    grep -E '^[[:space:]]*462[[:space:]]' "${SYSCALL_TBL}" >&2
-    log_error "Ensure you are patching Linux 6.6 LTS (x86_64)."
+if grep -Eq "^[[:space:]]*${SYSCALL_NR}[[:space:]]+common[[:space:]]+cfs_timeshare[[:space:]]+sys_cfs_timeshare" "${SYSCALL_TBL}"; then
+    log_ok "[4/5] syscall_64.tbl already registers syscall ${SYSCALL_NR} (cfs_timeshare) (no change)."
+elif grep -Eq "^[[:space:]]*${SYSCALL_NR}[[:space:]]" "${SYSCALL_TBL}"; then
+    log_error "Syscall number ${SYSCALL_NR} is already occupied by another syscall in ${SYSCALL_TBL}:"
+    grep -E "^[[:space:]]*${SYSCALL_NR}[[:space:]]" "${SYSCALL_TBL}" >&2
+    log_error "Ensure you are patching Ubuntu Server 26.04 LTS Linux 7.0 (x86_64)."
     exit 1
 else
-    atomic_write_with_awk "${SYSCALL_TBL}" '
+    tmp_tbl="$(mktemp "${SYSCALL_TBL}.cfs_patch.XXXXXX")"
+    if awk -v nr="${SYSCALL_NR}" '
         BEGIN { inserted = 0 }
-        !inserted && ($0 ~ /^# Due to a historical design error/ || $0 ~ /^512[ \t]/) {
-            print "462\tcommon\tcfs_timeshare\t\tsys_cfs_timeshare"
-            print ""
+        !inserted && ($0 ~ /^# Due to a historical design error/ || $0 ~ /^# x32-specific/ || $0 ~ /^512[ \t]/) {
+            printf "%s\tcommon\tcfs_timeshare\t\tsys_cfs_timeshare\n\n", nr
             inserted = 1
         }
         { print $0 }
         END {
             if (!inserted) {
-                print "462\tcommon\tcfs_timeshare\t\tsys_cfs_timeshare"
+                printf "%s\tcommon\tcfs_timeshare\t\tsys_cfs_timeshare\n", nr
             }
         }
-    '
-    log_ok "[4/5] Registered syscall 462 (cfs_timeshare) in arch/x86/entry/syscalls/syscall_64.tbl."
+    ' "${SYSCALL_TBL}" > "${tmp_tbl}"; then
+        chmod 0644 "${tmp_tbl}"
+        mv -f "${tmp_tbl}" "${SYSCALL_TBL}"
+    else
+        rm -f "${tmp_tbl}"
+        exit 1
+    fi
+    log_ok "[4/5] Registered syscall ${SYSCALL_NR} (cfs_timeshare) in arch/x86/entry/syscalls/syscall_64.tbl."
 fi
 
 # ---------------------------------------------------------------------------
@@ -209,10 +239,21 @@ else
 fi
 
 printf '\n'
-log_ok "Kernel tree patched cleanly and idempotently!"
+log_ok "Ubuntu Server 26.04 LTS Linux 7.0 kernel tree patched cleanly and idempotently!"
 printf '\nNext steps inside %s:\n' "${KERNEL_DIR}"
-printf '  1. cp -v /boot/config-$(uname -r) .config && make olddefconfig\n'
+printf '  1. cp -v /boot/config-"$(uname -r)" .config\n'
 printf '  2. scripts/config --set-str SYSTEM_TRUSTED_KEYS ""\n'
 printf '  3. scripts/config --set-str SYSTEM_REVOCATION_KEYS ""\n'
-printf '  4. make -j"$(nproc)"\n'
-printf '  5. sudo make modules_install && sudo make install && sudo reboot\n'
+printf '  4. scripts/config --disable WERROR\n'
+printf '  5. scripts/config --disable RUST\n'
+printf '  6. make olddefconfig && make -j"$(nproc)"\n'
+printf '  7. sudo make modules_install && sudo make install\n'
+printf '  8. Ensure Dracut initramfs is present for the custom kernel:\n'
+printf '       KVER="$(make -s kernelrelease)"\n'
+printf '       if [ ! -f "/boot/initrd.img-${KVER}" ]; then\n'
+printf '         sudo dracut --force "/boot/initrd.img-${KVER}" "${KVER}"\n'
+printf '       fi\n'
+printf '  9. Update GRUB and pin the custom kernel as default:\n'
+printf '       sudo update-grub\n'
+printf '       sudo sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\\"Advanced options for Ubuntu>Ubuntu, with Linux ${KVER}\\"|" /etc/default/grub\n'
+printf '       sudo update-grub && sudo reboot\n'

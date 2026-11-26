@@ -152,7 +152,7 @@ void cfs_ui_end_dashboard(struct cfs_ui_ctx *ui)
 }
 
 void cfs_ui_render_dashboard(const struct cfs_ui_ctx *ui,
-			     const struct cfs_shm_region *shm,
+			     struct cfs_shm_region *shm,
 			     uint64_t elapsed_us,
 			     int completed_count)
 {
@@ -197,7 +197,7 @@ void cfs_ui_render_dashboard(const struct cfs_ui_ctx *ui,
 	       c(ui, ANSI_DIM), c(ui, ANSI_RESET), eol);
 
 	for (i = 0; i < shm->num_procs; i++) {
-		const struct cfs_worker_slot *w = &shm->workers[i];
+		struct cfs_worker_slot *w = &shm->workers[i];
 		uint64_t done = atomic_load_explicit(&w->completed_work,
 						     memory_order_acquire);
 		uint64_t cpu_us = atomic_load_explicit(&w->cpu_time_us,
@@ -258,7 +258,7 @@ static int nice_to_class_idx(int nice_val)
 }
 
 void cfs_ui_render_summary(const struct cfs_ui_ctx *ui,
-			   const struct cfs_shm_region *shm,
+			   struct cfs_shm_region *shm,
 			   bool was_aborted)
 {
 	struct class_stats classes[3] = {
@@ -299,7 +299,7 @@ void cfs_ui_render_summary(const struct cfs_ui_ctx *ui,
 	       c(ui, ANSI_DIM), c(ui, ANSI_RESET));
 
 	for (i = 0; i < shm->num_procs; i++) {
-		const struct cfs_worker_slot *w = &shm->workers[i];
+		struct cfs_worker_slot *w = &shm->workers[i];
 		uint64_t done = atomic_load_explicit(&w->completed_work,
 						     memory_order_acquire);
 		uint64_t cpu_us = atomic_load_explicit(&w->cpu_time_us,

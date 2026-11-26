@@ -557,10 +557,10 @@ int main(int argc, char *argv[])
 			__NR_cfs_timeshare, strerror(saved_errno), saved_errno);
 		if (saved_errno == ENOSYS) {
 			fprintf(stderr,
-				"        Running kernel '%s' does not implement sys_cfs_timeshare.\n"
-				"        Patch, compile, and boot Linux 6.6 LTS using:\n"
-				"          ./scripts/patch_kernel.sh <linux-6.6-src-dir>\n",
-				ui.kernel_release);
+				"        Running kernel '%s' does not implement sys_cfs_timeshare (#%d).\n"
+				"        Patch, compile, and boot Ubuntu Server 26.04 LTS Linux 7.0 using:\n"
+				"          ./scripts/patch_kernel.sh ~/linux-source-7.0.0\n",
+				ui.kernel_release, __NR_cfs_timeshare);
 		}
 		terminate_and_reap_all(shm);
 		munmap(shm, sizeof(*shm));
