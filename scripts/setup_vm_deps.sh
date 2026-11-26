@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0
 #
-# setup_vm_deps.sh - Install Ubuntu Server 26.04 LTS ("Resolute Raccoon") build
-#                    dependencies and the native Linux 7.0 kernel source package
-#                    (`linux-source` -> linux-source-7.0.0), GCC 15, pahole,
-#                    and tmux required for end-to-end compilation and demo runs.
+# setup_vm_deps.sh - Install Ubuntu Server 26.04 LTS ("Resolute Raccoon")
+#                    — including Ubuntu Server (minimized) — build dependencies,
+#                    native Linux 7.0 kernel source (`linux-source` ->
+#                    linux-source-7.0.0), GCC 15, Perl (for localmodconfig),
+#                    pahole, and tmux required for end-to-end compilation and
+#                    demo runs.
 
 set -euo pipefail
 
@@ -36,8 +38,12 @@ if [[ -r /etc/os-release ]]; then
     fi
 fi
 
-# Note: Uses `env DEBIAN_FRONTEND=noninteractive` (rather than `sudo -E`) so
-# the script works cleanly with Ubuntu 26.04 LTS's default `sudo-rs`.
+# Note:
+#   - Uses `env DEBIAN_FRONTEND=noninteractive` (rather than `sudo -E`) so
+#     the script works cleanly with Ubuntu 26.04 LTS's default `sudo-rs`.
+#   - Explicitly includes packages omitted by Ubuntu Server (minimized) such as
+#     `perl` (required by `make localmodconfig` / streamline_config.pl),
+#     `ca-certificates`, `file`, `patch`, `procps`, `bzip2`, and `nano`.
 PACKAGES=(
     build-essential
     gcc
@@ -50,6 +56,8 @@ PACKAGES=(
     libelf-dev
     libdw-dev
     openssl
+    ca-certificates
+    perl
     bc
     gawk
     python3
@@ -58,6 +66,10 @@ PACKAGES=(
     bzip2
     xz-utils
     tar
+    file
+    patch
+    procps
+    nano
     fakeroot
     rsync
     kmod

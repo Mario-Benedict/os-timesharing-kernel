@@ -41,7 +41,7 @@ Every script, kernel source file, user-space binary, and build instruction in th
 
 | Layer | Version / Standard |
 | :--- | :--- |
-| **Operating System** | **Ubuntu Server 26.04 LTS** (*Resolute Raccoon*, `x86_64`) |
+| **Operating System** | **Ubuntu Server 26.04 LTS (minimized or standard)** (*Resolute Raccoon*, `x86_64`) |
 | **Kernel Source & Target** | **Linux 7.0** via official Ubuntu package `linux-source` (`linux-source-7.0.0` $\rightarrow$ **`7.0.0-cfs-timeshare`**) |
 | **Custom System Call** | **`#500`** (`__NR_cfs_timeshare` / `sys_cfs_timeshare`, safely above Linux 7.0's `#472 fchroot` and below `#512` x32) |
 | **Kernel Timer API** | `timer_setup()`, `mod_timer()`, **`timer_delete_sync()`** (Linux 7.0 native API) |
@@ -79,17 +79,68 @@ Every script, kernel source file, user-space binary, and build instruction in th
 
 ---
 
-## Prerequisites & VM Setup (Ubuntu Server 26.04 LTS x86_64)
+## VM Creation & Ubuntu Server 26.04 LTS Installation Guide
 
-Recommended virtual machine specification for compiling Ubuntu 26.04's Linux 7.0 kernel smoothly:
-- **OS:** **Ubuntu Server 26.04 LTS** (`x86_64`, *Resolute Raccoon*)
-- **CPU:** 4+ vCPUs (more cores significantly reduce kernel build time)
-- **RAM:** 6–8 GB (4 GB minimum; 8 GB recommended if keeping `CONFIG_DEBUG_INFO_BTF=y`)
-- **Disk:** 40+ GB free space (Linux 7.0 build tree + modules + debug info take ~25–30 GB)
+Follow these exact settings when creating and installing your virtual machine (VirtualBox, VMware, QEMU/KVM, or Hyper-V) to avoid out-of-space errors, Secure Boot rejections, and slow builds.
 
-Install all required build packages **and** Ubuntu 26.04's matching `linux-source` (`linux-source-7.0.0`) package in one step:
+### 1. Virtual Machine Hardware Settings
+
+| Setting | Recommended Value | Why It Matters |
+| :--- | :--- | :--- |
+| **ISO Image** | **Ubuntu Server 26.04 LTS (`amd64` / `x86_64`)** | Matches the Linux 7.0 kernel and GCC 15 toolchain used throughout this repo. |
+| **vCPUs** | **4+ cores** | Parallel `make -j"$(nproc)"` scales almost linearly with CPU cores. |
+| **RAM** | **4–8 GB** (6 GB recommended) | Prevents OOM kills during parallel compilation and linking. |
+| **Virtual Disk** | **40 GB+** (dynamically allocated) | Leaves generous headroom for OS, extracted `linux-source-7.0.0`, build artifacts, and `/boot`. |
+| **Secure Boot** | **Disabled** | Custom-compiled kernels are unsigned; UEFI Secure Boot blocks them with `bad shim signature`. |
+| **Network** | **NAT** (with port-forwarding for SSH) or **Bridged** | Required for `apt-get` downloads and SSH access. |
+
+### 2. What to Choose During the Ubuntu Server 26.04 LTS Installer
+
+When stepping through the Ubuntu Server installer screens, choose these options:
+
+1. **Language & Keyboard:** Choose English (or your preferred keyboard layout).
+2. **Choose the type of installation:** Select **`Ubuntu Server (minimized)`** *(recommended — it installs the exact same Ubuntu 26.04 Linux 7.0 kernel and Dracut stack as standard Ubuntu Server, while omitting unneeded documentation/userland extras to save disk space and speed up setup. Everything extra needed for kernel compilation, including `perl` for `make localmodconfig`, is installed automatically by `./scripts/setup_vm_deps.sh`; standard `Ubuntu Server` also works identically).*
+3. **Network Configuration:** Wait until your virtual NIC obtains an IPv4 address via DHCP (leave Proxy blank unless required by your network).
+4. **Guided Storage Configuration (CRITICAL — Do Not Leave Default 50% LVM Allocation!):**
+   - Select **`Use an entire disk`** and keep **`Set up this disk as an LVM group`** checked.
+   - **Important:** On the next **Storage Configuration** summary screen, Ubuntu Server's installer **only allocates ~50% of your disk** to `ubuntu-lv` (`/`) by default (e.g., ~19 GB on a 40 GB disk), leaving the remaining half unallocated! That causes `No space left on device` during kernel builds.
+   - **Fix it right in the installer:**
+     1. Under **USED DEVICES**, highlight **`ubuntu-lv`** (mounted at `/`) and press **Enter**.
+     2. Select **`Edit`**.
+     3. Change **Size** to the **maximum available size** shown on screen (e.g., `~37.0G` on a 40 GB disk) and select **`Save`**.
+     4. Confirm **`Done`** → **`Continue`**.
+5. **Profile Configuration:** Enter your name, server name, username (e.g., `linux`), and password.
+6. **Ubuntu Pro:** Select **`Skip for now`**.
+7. **SSH Configuration:** Check **`[X] Install OpenSSH server`** so you can SSH into the VM and copy/paste commands cleanly.
+8. **Featured Server Snaps:** Leave **all unchecked** to keep disk usage minimal.
+9. **Installation Complete:** Select **`Reboot Now`** and remove the installation ISO when prompted.
+
+### 3. Verify Free Disk Space Before Starting (and Fix Existing VMs)
+
+After logging in to your Ubuntu Server 26.04 LTS VM, verify `/` has at least **25 GB** free:
 
 ```bash
+df -h /
+```
+
+If you already installed Ubuntu Server with default LVM settings and `/` is only ~19 GB, expand it online in 2 seconds (no reboot required):
+
+```bash
+sudo vgs   # Check if VFree shows unused space (e.g., 19.00g)
+sudo lvextend -l +100%FREE /dev/ubuntu-vg/ubuntu-lv
+sudo resize2fs /dev/ubuntu-vg/ubuntu-lv
+df -h /
+```
+
+### 4. Bootstrap `git` (Minimized Install) & Install Build Dependencies
+
+Because **Ubuntu Server (minimized)** does not pre-install `git` or full `perl`, bootstrap `git` first to clone the repository, then run `./scripts/setup_vm_deps.sh` (which installs all missing minimized tools — including `perl` for `make localmodconfig`, `ca-certificates`, `file`, `patch`, `procps`, `nano`, `bzip2`, GCC 15, `dwarves`, `tmux`, and Ubuntu 26.04's matching `linux-source-7.0.0` package — without needing `sudo unminimize`):
+
+```bash
+sudo apt-get update && sudo apt-get install -y git ca-certificates
+git clone <your-repo-url> os-timesharing-kernel
+cd os-timesharing-kernel
+
 chmod +x scripts/*.sh
 ./scripts/setup_vm_deps.sh
 ```
@@ -125,7 +176,9 @@ This script safely performs 5 idempotent steps (running it again creates zero du
 4. Registers syscall **`500`** (`cfs_timeshare`, parsed from `include/cfs_shared.h`) in `~/linux-source-7.0.0/arch/x86/entry/syscalls/syscall_64.tbl`.
 5. Sets `EXTRAVERSION = -cfs-timeshare` in `~/linux-source-7.0.0/Makefile`.
 
-### 3. Configure, Compile, Install, and Pin in GRUB (Dracut-Ready)
+### 3. Configure & Compile (Fast, Low-Disk VM Build)
+
+Using `make localmodconfig` + `DEBUG_INFO_NONE` strips thousands of unneeded physical hardware drivers (Wi-Fi, GPUs, AMD camera ISP, etc.) and bulky DWARF debug objects while keeping **every driver currently used by your VM** and your built-in **`cfs_timeshare`** syscall (`obj-y`). This cuts disk usage from ~30 GB down to **~3–4 GB** and build time from ~45 min down to **~5–10 minutes**:
 
 ```bash
 cd ~/linux-source-7.0.0
@@ -133,31 +186,40 @@ cd ~/linux-source-7.0.0
 # 1. Seed .config from your running Ubuntu Server 26.04 LTS Linux 7.0 kernel
 cp -v /boot/config-"$(uname -r)" .config
 
-# 2. Clear Canonical signing key paths and disable WERROR & RUST for clean local GCC 15 builds
+# 2. Keep only modules currently loaded by your VM (fast & compact build)
+yes "" | make localmodconfig
+
+# 3. Clear Canonical signing keys and disable WERROR, RUST, and heavy DWARF/BTF debug info
 scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
 scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
 scripts/config --disable WERROR
 scripts/config --disable RUST
+scripts/config --disable DEBUG_INFO
+scripts/config --disable DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT
+scripts/config --disable DEBUG_INFO_BTF
+scripts/config --enable DEBUG_INFO_NONE
 
-# Optional: disable BTF debug generation to save ~15 GB disk space and speed up linking
-# scripts/config --disable DEBUG_INFO_BTF
-
-# 3. Reconcile config and compile using all available vCPUs
+# 4. Reconcile config and compile using all available vCPUs
 make olddefconfig
 make -j"$(nproc)"
+```
 
-# 4. Install kernel modules and kernel image into /boot
-sudo make modules_install
-sudo make install
+*(Note: Wait for `make -j"$(nproc)"` to finish with exit code 0 before running the install commands below.)*
 
-# 5. Verify initramfs image exists (fresh Ubuntu Server 26.04 LTS uses Dracut by default)
+### 4. Install Kernel, Verify Dracut Initramfs, Pin GRUB, and Reboot
+
+```bash
+# 1. Install kernel modules and kernel image into /boot (stops if either fails)
+sudo make modules_install && sudo make install
+
+# 2. Verify initramfs image exists (Ubuntu Server 26.04 LTS uses Dracut by default)
 KVER="$(make -s kernelrelease)"
 echo "Installed kernel release: ${KVER}"
 if [ ! -f "/boot/initrd.img-${KVER}" ]; then
     sudo dracut --force "/boot/initrd.img-${KVER}" "${KVER}"
 fi
 
-# 6. Update GRUB, verify the custom entry, pin it as default, and reboot
+# 3. Update GRUB, verify the custom entry, pin it as default, and reboot
 sudo update-grub
 grep -E "menuentry 'Ubuntu, with Linux ${KVER}'" /boot/grub/grub.cfg
 sudo sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${KVER}\"|" /etc/default/grub
@@ -165,7 +227,7 @@ sudo update-grub
 sudo reboot
 ```
 
-### 4. Verify the Custom Kernel After Reboot
+### 5. Verify the Custom Kernel After Reboot
 
 ```bash
 uname -r
@@ -274,8 +336,19 @@ make demo ARGS="-n 6 -q 100 -w 80"
 
 ## Troubleshooting (Ubuntu Server 26.04 LTS)
 
+- **`fatal error: closing dependency file ...: No space left on device`**
+  - Check `df -h /` and `sudo vgs`. Ubuntu Server's installer leaves ~50% of the disk unallocated in LVM (`VFree`) unless you expanded `ubuntu-lv` during install. Reclaim it immediately, clean partial build output, and rebuild using `localmodconfig` + `DEBUG_INFO_NONE`:
+    ```bash
+    sudo lvextend -l +100%FREE /dev/ubuntu-vg/ubuntu-lv
+    sudo resize2fs /dev/ubuntu-vg/ubuntu-lv
+    cd ~/linux-source-7.0.0 && make clean
+    sudo rm -rf /lib/modules/7.0.0-cfs-timeshare
+    ```
+    Then re-run **Step 3** above (`localmodconfig` + `DEBUG_INFO_NONE`).
+- **GRUB boot error: `error: bad shim signature`**
+  - UEFI **Secure Boot** is enabled in your VM settings. Power off the VM, disable Secure Boot in the VM firmware/EFI settings, and boot again.
 - **`syscall(__NR_cfs_timeshare=500) failed: Function not implemented (errno=38 / ENOSYS)`**
-  - You are still booted into Ubuntu 26.04's stock `7.0.0-*-generic` kernel. Run `uname -r` and verify `7.0.0-cfs-timeshare` appears. Re-run Step 6 (`GRUB_DEFAULT` + `sudo update-grub`) or select **Advanced options for Ubuntu → Ubuntu, with Linux 7.0.0-cfs-timeshare** at the GRUB prompt.
+  - You are still booted into Ubuntu 26.04's stock `7.0.0-*-generic` kernel. Run `uname -r` and verify `7.0.0-cfs-timeshare` appears. Re-run Step 4 (`GRUB_DEFAULT` + `sudo update-grub`) or select **Advanced options for Ubuntu → Ubuntu, with Linux 7.0.0-cfs-timeshare** at the GRUB prompt.
 - **Boot stops with `unable to mount root fs` or missing `initrd.img-7.0.0-cfs-timeshare`**
   - Ubuntu Server 26.04 LTS uses **Dracut** for initramfs generation. Boot the stock `7.0.0-*-generic` kernel and generate the missing initrd:
     ```bash
@@ -293,12 +366,6 @@ make demo ARGS="-n 6 -q 100 -w 80"
     ```bash
     scripts/config --set-str SYSTEM_TRUSTED_KEYS ""
     scripts/config --set-str SYSTEM_REVOCATION_KEYS ""
-    ```
-- **Kernel build fails with `BTF: .tmp_vmlinux.btf: pahole not found` or runs low on RAM/disk**
-  - Ensure `dwarves` and `libdw-dev` are installed via `./scripts/setup_vm_deps.sh`, or disable BTF cleanly with:
-    ```bash
-    scripts/config --disable DEBUG_INFO_BTF
-    make olddefconfig
     ```
 - **Right `tmux` pane waits for a password during `./scripts/run_demo.sh`**
   - Ubuntu 26.04's `sudo-rs` strictly enforces per-TTY credential caching, so the right pane PTY cannot share your outer shell's sudo ticket. Press `Ctrl-b →` in `tmux` to enter your password, or launch with `sudo ./scripts/run_demo.sh`.
